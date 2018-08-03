@@ -23,6 +23,7 @@ int usage(const std::string& name)
 			<< " --no-pk          no primary key\n"
 			<< " --wait           wait for producers before consuming\n"
 			<< " --fifo           ordered by time (extra index)\n"
+			<< " --tid            delete by tid\n"
 			<< " --zheap          use zheap table\n"
 			<< " --connstr X      connection string\n";
   return EXIT_FAILURE;
@@ -34,7 +35,7 @@ enum mode_type {
   MODE_FOR_UPDATE_SKIP_LOCKED
 };
 
-void do_consumer(const std::string& connstr, bool fifo, mode_type mode)
+void do_consumer(const std::string& connstr, bool fifo, bool tid, mode_type mode)
 {
   char query[1024];
 
@@ -46,11 +47,12 @@ void do_consumer(const std::string& connstr, bool fifo, mode_type mode)
   assert(PQresultStatus(result) == PGRES_COMMAND_OK);
   
   snprintf(query, sizeof(query),
-		   "SELECT ctid, destination, message "
+		   "SELECT %s, destination, message "
 		   "FROM sms_queue "
 		   "%s "
 		   "%s "
 		   "LIMIT 1",
+           tid ? "ctid" : "id",
 		   fifo ? "ORDER BY time" : "",
 		   mode == MODE_FOR_UPDATE ? "FOR UPDATE" :
 		   mode == MODE_FOR_UPDATE_SKIP_LOCKED ? "FOR UPDATE SKIP LOCKED" :
@@ -59,9 +61,10 @@ void do_consumer(const std::string& connstr, bool fifo, mode_type mode)
   assert(PQresultStatus(result) == PGRES_COMMAND_OK);
 
   Oid zero = 0;
-  result = PQprepare(conn, "my_delete",
-					 "DELETE FROM sms_queue WHERE ctid = $1",
-					 1, &zero);
+  snprintf(query, sizeof(query),
+          "DELETE FROM sms_queue WHERE %s = $1",
+          tid ? "ctid" : "id");
+  result = PQprepare(conn, "my_delete", query, 1, &zero);
   assert(PQresultStatus(result) == PGRES_COMMAND_OK);
   
   while (maybe_ready || !shutdown_received) {
@@ -136,6 +139,8 @@ int main(int argc, char *argv[])
   int nmessages = 1000;
   // whether to use (approx) fifo ordering (an index) or unordered
   bool fifo = false;
+  // whether to use tid to delete rows
+  bool tid = false;
   // whether to produce-wait-consume, or produce/consume concurrently
   bool wait = false;
   // whether to have a primary key
@@ -165,6 +170,8 @@ int main(int argc, char *argv[])
 	  wait = true;
 	} else if (arg == "--no-pk") {
 	  primary_key = false;
+	} else if (arg == "--tid") {
+	  tid = true;
 	} else if (arg == "--zheap") {
 	  zheap = true;
 	} else {
@@ -207,7 +214,7 @@ int main(int argc, char *argv[])
   // start all the consumer threads
   std::vector<std::thread> consumers;
   for (auto i = 0; i < nconsumers; ++i)
-	consumers.push_back(std::thread([&](){ do_consumer(connstr, fifo, mode); }));
+	consumers.push_back(std::thread([&](){ do_consumer(connstr, fifo, tid, mode); }));
 
   // wait for all the producers to finish (if we didn't already)
   for(auto& thread: producers)

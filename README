@@ -1,0 +1,7 @@
+This is a little benchmark I made for demoing SKIP LOCKED, for these talks:
+
+https://www.pgcon.org/2016/schedule/track/Applications/929.en.html
+http://2017.pgday.com.au/assets/queues-pgday-au-2017.pdf
+
+Now I'm also using it to investigate zheap.
+
